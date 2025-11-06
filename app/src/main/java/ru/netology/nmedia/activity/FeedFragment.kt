@@ -23,7 +23,11 @@ import ru.netology.nmedia.databinding.FragmentFeedBinding
 import ru.netology.nmedia.dto.Post
 import ru.netology.nmedia.repository.PostRepository
 import ru.netology.nmedia.viewmodel.PostViewModel
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.snackbar.Snackbar
 import javax.inject.Inject
+
 
 @AndroidEntryPoint
 class FeedFragment : Fragment() {
@@ -68,45 +72,114 @@ class FeedFragment : Fragment() {
         })
         binding.list.adapter = adapter
 
-        // Устаревший вариант
-        /*
-        lifecycleScope.launchWhenCreated {
-            viewModel.data.collectLatest(adapter::submitData)
-        }
-         */
 
-        // Актуальный вариант
+        // Загрузка данных Paging
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 viewModel.data.collectLatest(adapter::submitData)
             }
         }
 
-        // Устаревший вариант
-        /*
-        lifecycleScope.launchWhenCreated {
-            adapter.loadStateFlow.collectLatest { state ->
-                binding.swiperefresh.isRefreshing =
-                    state.refresh is LoadState.Loading ||
-                    state.prepend is LoadState.Loading ||
-                    state.append is LoadState.Loading
-            }
-        }
-         */
 
         // Актуальный вариант
+        // Обработка состояний загрузки Paging
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 adapter.loadStateFlow.collectLatest { state ->
-                    binding.swiperefresh.isRefreshing =
-                        state.refresh is LoadState.Loading ||
-                                state.prepend is LoadState.Loading ||
-                                state.append is LoadState.Loading
+                    binding.swiperefresh.isRefreshing = state.refresh is LoadState.Loading
+
+
+                    // Показываем/скрываем прогресс и пустой текст
+                    binding.progress.visibility =
+                        if (state.refresh is LoadState.Loading) View.VISIBLE else View.GONE
+                    binding.emptyText.visibility =
+                        if (state.refresh is LoadState.NotLoading && adapter.itemCount == 0) View.VISIBLE else View.GONE
+
+
+                    // Показываем ошибки загрузки
+                    val errorState = state.refresh as? LoadState.Error
+                        ?: state.append as? LoadState.Error
+                        ?: state.prepend as? LoadState.Error
+
+                    errorState?.let {
+                        Snackbar.make(
+                            binding.root,
+                            "Ошибка загрузки: ${it.error.message}",
+                            Snackbar.LENGTH_LONG
+                        ).show()
+                    }
                 }
             }
         }
 
+//обычный refresh
         binding.swiperefresh.setOnRefreshListener(adapter::refresh)
+
+        // Кнопка для ручного обновления сверху
+        binding.refreshPrependButton.setOnClickListener {
+            viewModel.refreshPrepend()
+        }
+
+        // Наблюдение за состоянием ручного обновления сверху
+        viewModel.prependState.observe(viewLifecycleOwner) { state ->
+            binding.refreshPrependButton.isEnabled = !state.loading
+
+            when {
+                state.loading -> {
+                    binding.refreshPrependButton.text = "Загрузка..."
+                }
+
+                state.refreshPrependCount > 0 -> {
+                    binding.refreshPrependButton.text = "Обновить"
+                    Snackbar.make(
+                        binding.root,
+                        "Загружено ${state.refreshPrependCount} новых постов",
+                        Snackbar.LENGTH_SHORT
+                    ).show()
+                    // Автоматически скрываем кнопку через несколько секунд
+                    binding.root.postDelayed({
+                        binding.refreshPrependButton.visibility = View.GONE
+                    }, 3000)
+                }
+
+                state.error -> {
+                    binding.refreshPrependButton.text = "Обновить"
+                    Snackbar.make(
+                        binding.root,
+                        "Ошибка загрузки новых постов",
+                        Snackbar.LENGTH_LONG
+                    ).show()
+                }
+
+                else -> {
+                    binding.refreshPrependButton.text = "Обновить"
+                }
+            }
+        }
+
+        // Наблюдение за общим состоянием данных
+        viewModel.dataState.observe(viewLifecycleOwner) { state ->
+            if (state.error) {
+                Snackbar.make(binding.root, "Ошибка загрузки", Snackbar.LENGTH_LONG).show()
+            }
+        }
+        // Показываем кнопку обновления при скролле к верху
+        binding.list.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+                super.onScrolled(recyclerView, dx, dy)
+                val layoutManager = recyclerView.layoutManager as LinearLayoutManager
+                val firstVisibleItemPosition = layoutManager.findFirstVisibleItemPosition()
+
+                // Показываем кнопку обновления, если пользователь прокрутил к самому верху
+                if (firstVisibleItemPosition == 0) {
+                    binding.refreshPrependButton.visibility = View.VISIBLE
+                } else {
+                    // скрыть кнопку, если не вверху, или оставить видимой
+                    binding.refreshPrependButton.visibility = View.GONE
+                }
+            }
+        })
+
 
         binding.fab.setOnClickListener {
             findNavController().navigate(R.id.action_feedFragment_to_newPostFragment)
