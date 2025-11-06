@@ -33,6 +33,9 @@ class PostRepositoryImpl @Inject constructor(
     private val apiService: ApiService,
 ) : PostRepository {
 
+    // Создаем экземпляр PostRemoteMediator с доступом извне
+    private val postRemoteMediator = PostRemoteMediator(apiService, appDb, postDao, postRemoteKeyDao)
+
     @OptIn(ExperimentalPagingApi::class)
     override val data: Flow<PagingData<Post>> = Pager(
         config = PagingConfig(pageSize = 25),
@@ -120,6 +123,20 @@ class PostRepositoryImpl @Inject constructor(
             throw NetworkError
         } catch (e: Exception) {
             throw UnknownError
+        }
+    }
+
+    //  метод для ручного обновления с добавлением данных сверху
+    override suspend fun refreshPrepend(): List<Post> {
+        return try {
+            val newPosts = postRemoteMediator.refreshPrepend()
+            newPosts.map { it.toDto() }
+        } catch (e: Exception) {
+            if (e is IOException) {
+                throw NetworkError
+            } else {
+                throw UnknownError
+            }
         }
     }
 }

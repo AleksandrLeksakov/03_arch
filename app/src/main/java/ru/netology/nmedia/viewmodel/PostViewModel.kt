@@ -55,6 +55,12 @@ class PostViewModel @Inject constructor(
     val dataState: LiveData<FeedModelState>
         get() = _dataState
 
+
+    // состояние для ручного обновления сверху
+    private val _prependState = MutableLiveData<FeedModelState>(FeedModelState())
+    val prependState: LiveData<FeedModelState>
+        get() = _prependState
+
     private val edited = MutableLiveData(empty)
     private val _postCreated = SingleLiveEvent<Unit>()
     val postCreated: LiveData<Unit>
@@ -81,10 +87,29 @@ class PostViewModel @Inject constructor(
     fun refreshPosts() = viewModelScope.launch {
         try {
             _dataState.value = FeedModelState(refreshing = true)
-//            repository.getAll()
+//           Paging 3 автоматически обработает refresh через RemoteMediator
             _dataState.value = FeedModelState()
         } catch (e: Exception) {
             _dataState.value = FeedModelState(error = true)
+        }
+    }
+
+
+    // Новый метод для ручного обновления с добавлением данных сверху
+    fun refreshPrepend() = viewModelScope.launch {
+        try {
+            _prependState.value = FeedModelState(loading = true, refreshing = true)
+            val newPosts = repository.refreshPrepend()
+            _prependState.value = FeedModelState(
+                refreshPrependCount = newPosts.size
+            )
+
+            // Если были добавлены новые посты, показываем уведомление
+            if (newPosts.isNotEmpty()) {
+                // Можно добавить дополнительную логику для уведомления
+            }
+        } catch (e: Exception) {
+            _prependState.value = FeedModelState(error = true)
         }
     }
 
@@ -127,6 +152,12 @@ class PostViewModel @Inject constructor(
     }
 
     fun removeById(id: Long) {
-        TODO()
+        viewModelScope.launch {
+            try {
+                repository.removeById(id)
+            } catch (e: Exception) {
+                _dataState.value = FeedModelState(error = true)
+            }
+        }
     }
 }

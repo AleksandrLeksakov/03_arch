@@ -22,20 +22,41 @@ class PostRemoteMediator(
     private val postDao: PostDao,
     private val postRemoteKeyDao: PostRemoteKeyDao,
 ) : RemoteMediator<Int, PostEntity>() {
+
+    // Добавляем флаг для отслеживания первого запуска
+    private var isInitialLoad = true
+
     override suspend fun load(
         loadType: LoadType,
         state: PagingState<Int, PostEntity>
     ): MediatorResult {
         try {
             val response = when (loadType) {
-                LoadType.REFRESH -> service.getLatest(state.config.initialLoadSize)
-                LoadType.PREPEND -> {
-                    val id = postRemoteKeyDao.max() ?: return MediatorResult.Success(
-                        endOfPaginationReached = false
-                    )
-                    service.getAfter(id, state.config.pageSize)
+                LoadType.REFRESH -> {
+                    // REFRESH: загружаем свежие данные, но не удаляем старые
+                    val latestPosts = service.getLatest(state.config.initialLoadSize)
+                    if (isInitialLoad) {
+                        // При первом запуске очищаем БД
+                        isInitialLoad = false
+                        latestPosts
+                    } else {
+                        // При последующих refresh - загружаем только новые данные
+                        val maxId = postRemoteKeyDao.max()
+                        if (maxId != null) {
+                            service.getAfter(maxId, state.config.pageSize)
+                        } else {
+                            service.getLatest(state.config.initialLoadSize)
+                        }
+                    }
                 }
+
+                LoadType.PREPEND -> {
+                    // ОТКЛЮЧАЕМ автоматический PREPEND
+                    return MediatorResult.Success(endOfPaginationReached = true)
+                }
+
                 LoadType.APPEND -> {
+                    // APPEND работает в обычном режиме
                     val id = postRemoteKeyDao.min() ?: return MediatorResult.Success(
                         endOfPaginationReached = false
                     )
@@ -58,7 +79,13 @@ class PostRemoteMediator(
             db.withTransaction {
                 when (loadType) {
                     LoadType.REFRESH -> {
-                        postRemoteKeyDao.removeAll()
+                        if (isInitialLoad) {
+                            // При первом запуске очищаем всё
+                            postRemoteKeyDao.removeAll()
+                            postDao.removeAll()
+                        }
+
+                        // Обновляем ключи для пагинации
                         postRemoteKeyDao.insert(
                             listOf(
                                 PostRemoteKeyEntity(
@@ -71,17 +98,14 @@ class PostRemoteMediator(
                                 ),
                             )
                         )
-                        postDao.removeAll()
                     }
+
                     LoadType.PREPEND -> {
-                        postRemoteKeyDao.insert(
-                            PostRemoteKeyEntity(
-                                type = PostRemoteKeyEntity.KeyType.AFTER,
-                                id = body.first().id,
-                            )
-                        )
+                        // PREPEND отключен - ничего не делаем
                     }
+
                     LoadType.APPEND -> {
+                        // Обновляем ключ для APPEND
                         postRemoteKeyDao.insert(
                             PostRemoteKeyEntity(
                                 type = PostRemoteKeyEntity.KeyType.BEFORE,
@@ -90,6 +114,8 @@ class PostRemoteMediator(
                         )
                     }
                 }
+
+                // Вставляем новые посты (БД сама обработает конфликты через UNIQUE)
                 postDao.insert(body.toEntity())
             }
             return MediatorResult.Success(endOfPaginationReached = false)
@@ -97,8 +123,48 @@ class PostRemoteMediator(
             if (e is CancellationException) {
                 throw e
             }
-
             return MediatorResult.Error(e)
+        }
+    }
+
+    // Новый метод для ручного добавления данных сверху (refresh to prepend)
+    suspend fun refreshPrepend(): List<PostEntity> {
+        return try {
+            val maxId = postRemoteKeyDao.max() ?: return emptyList()
+            val response = service.getAfter(maxId, 10) // Загружаем новые посты после текущего максимума
+
+            if (!response.isSuccessful) {
+                throw ApiError(response.code(), response.message())
+            }
+
+            val body = response.body() ?: throw ApiError(
+                response.code(),
+                response.message(),
+            )
+
+            if (body.isEmpty()) {
+                return emptyList()
+            }
+
+            db.withTransaction {
+                // Обновляем AFTER ключ
+                postRemoteKeyDao.insert(
+                    PostRemoteKeyEntity(
+                        type = PostRemoteKeyEntity.KeyType.AFTER,
+                        id = body.first().id,
+                    )
+                )
+
+                // Вставляем новые посты
+                postDao.insert(body.toEntity())
+            }
+
+            body.toEntity()
+        } catch (e: Exception) {
+            if (e is CancellationException) {
+                throw e
+            }
+            emptyList()
         }
     }
 }

@@ -14,4 +14,7 @@ interface PostRepository {
     suspend fun removeById(id: Long)
     suspend fun likeById(id: Long)
     suspend fun upload(upload: MediaUpload): Media
+
+    //  метод для ручного обновления с добавлением данных сверху
+    suspend fun refreshPrepend(): List<Post>
 }
