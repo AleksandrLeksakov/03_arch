@@ -83,25 +83,41 @@ class PostRemoteMediator(
                             // При первом запуске очищаем всё
                             postRemoteKeyDao.removeAll()
                             postDao.removeAll()
+                        } else {
+                            // При последующих REFRESH очищаем только ключи
+                            postRemoteKeyDao.removeAll()
                         }
 
-                        // Обновляем ключи для пагинации
+                        // Всегда вставляем AFTER ключ
                         postRemoteKeyDao.insert(
-                            listOf(
-                                PostRemoteKeyEntity(
-                                    type = PostRemoteKeyEntity.KeyType.AFTER,
-                                    id = body.first().id,
-                                ),
+                            PostRemoteKeyEntity(
+                                type = PostRemoteKeyEntity.KeyType.AFTER,
+                                id = body.first().id,
+                            )
+                        )
+
+                        //BEFORE ключ обновляем только если БД не пуста
+                        // Проверяем, есть ли посты в БД (кроме тех, которые мы только что вставили)
+                        val hasExistingPosts = if (isInitialLoad) {
+                            false // При первом запуске БД была очищена, так что постов нет
+                        } else {
+                            // Проверяем, были ли посты в БД до этого refresh
+                            // Если это не первый запуск и мы не очищали БД, значит посты есть
+                            true
+                        }
+
+                        if (hasExistingPosts) {
+                            postRemoteKeyDao.insert(
                                 PostRemoteKeyEntity(
                                     type = PostRemoteKeyEntity.KeyType.BEFORE,
                                     id = body.last().id,
-                                ),
+                                )
                             )
-                        )
+                        }
                     }
 
                     LoadType.PREPEND -> {
-                        // PREPEND отключен - ничего не делаем
+
                     }
 
                     LoadType.APPEND -> {
